@@ -1,0 +1,35 @@
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QSlider, QPushButton, QHBoxLayout
+from PyQt5.QtCore import Qt
+
+class ParameterPanel(QWidget):
+    def __init__(self, parent=None):
+        super(ParameterPanel, self).__init__(parent)
+        
+        self.layout = QVBoxLayout()
+        
+        self.label = QLabel("Adjust Parameters")
+        self.layout.addWidget(self.label)
+        
+        self.coefficient_slider = QSlider(Qt.Horizontal)
+        self.coefficient_slider.setRange(1, 100)  # Example range
+        self.coefficient_slider.setValue(50)  # Default value
+        self.coefficient_slider.valueChanged.connect(self.update_coefficient)
+        
+        self.layout.addWidget(self.coefficient_slider)
+        
+        self.coefficient_value_label = QLabel("Current Coefficient: 50")
+        self.layout.addWidget(self.coefficient_value_label)
+        
+        self.reset_button = QPushButton("Reset")
+        self.reset_button.clicked.connect(self.reset_parameters)
+        self.layout.addWidget(self.reset_button)
+        
+        self.setLayout(self.layout)
+
+    def update_coefficient(self, value):
+        self.coefficient_value_label.setText(f"Current Coefficient: {value}")
+        # Here you would typically emit a signal or call a method to update the processing logic
+
+    def reset_parameters(self):
+        self.coefficient_slider.setValue(50)  # Reset to default value
+        self.update_coefficient(50)  # Update label accordingly
