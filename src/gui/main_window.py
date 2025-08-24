@@ -129,6 +129,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.synthesize_btn = QPushButton("生成外延")
         self.synthesize_btn.setToolTip("使用已采集的样本段随机合成逐样本外延（会使用当前预测的 pred_high/pred_low 作为目标）")
         btn_row.addWidget(self.synthesize_btn)
+
+        # 在已有按钮行加入“生成预测线”按钮（与其它按钮同一行 btn_row 中）
+        self.predict_btn = QPushButton("生成预测线")
+        self.predict_btn.setToolTip("根据当前参考区间计算 pred_high / pred_low 并绘制预测线（手动触发）")
+        btn_row.addWidget(self.predict_btn)
+        self.predict_btn.clicked.connect(self.on_generate_predictions_clicked)
+
         ctrl_layout.addLayout(btn_row)
         self.export_btn.clicked.connect(self.on_export_clicked)
         self.save_img_btn.clicked.connect(self.on_save_image_clicked)
@@ -262,27 +269,21 @@ class MainWindow(QtWidgets.QMainWindow):
         return params
 
     def on_param_changed(self):
+        """
+        参数变更仅更新本地显示（不自动计算预测线）。
+        用户需点击“生成预测线”按钮来触发 extend_data 计算并绘制。
+        """
         if getattr(self, 'processed_df', None) is None:
             return
         params = self.get_params()
-        if process_module is None:
-            # 仅更新图（没有预测）
-            try:
-                self.plot.update_plot(self.processed_df, None, None, colors={}, ref_start=params.get('ref_start'), ref_end=params.get('ref_end'))
-            except Exception:
-                pass
-            return
+
+        # 不再自动生成预测线：清除/保留 final_df/ext_df 状态以避免自动覆盖
+        # 将 final_df 设为 processed_df（仅用于绘图显示原始数据）
+        self.final_df = self.processed_df
+        self.ext_df = None
+
         try:
-            final_df, ext_df = process_module.extend_data(self.processed_df, **params)
-            self.final_df = final_df
-            self.ext_df = ext_df
-        except Exception as e:
-            # 允许 process.extend_data 出错时仍绘制原数据并显示参考区间
-            print("extend_data 错误:", e)
-            self.final_df = self.processed_df
-            self.ext_df = None
-        try:
-            self.plot.update_plot(self.processed_df, self.final_df, self.ext_df, colors={}, ref_start=params.get('ref_start'), ref_end=params.get('ref_end'))
+            self.plot.update_plot(self.processed_df, self.final_df, None, colors={}, ref_start=params.get('ref_start'), ref_end=params.get('ref_end'))
         except Exception:
             pass
 
@@ -428,5 +429,37 @@ class MainWindow(QtWidgets.QMainWindow):
             import traceback, sys
             print("on_synthesize_clicked 错误:", traceback.format_exc(), file=sys.stderr)
             QtWidgets.QMessageBox.critical(self, "生成失败", str(e))
+
+    def on_generate_predictions_clicked(self):
+        """手动触发：根据当前参考区间计算预测（pred_high/pred_low）并更新绘图。"""
+        try:
+            if getattr(self, 'processed_df', None) is None:
+                QtWidgets.QMessageBox.information(self, "提示", "请先加载数据")
+                return
+            if process_module is None:
+                QtWidgets.QMessageBox.critical(self, "错误", "无法导入 process 模块")
+                return
+
+            params = self.get_params()
+            # 调用 process.extend_data 生成预测（可能较慢，必要时考虑放到后台线程）
+            try:
+                final_df, ext_df = process_module.extend_data(self.processed_df, **params)
+            except Exception as e:
+                raise RuntimeError(f"生成预测失败: {e}")
+
+            self.final_df = final_df
+            self.ext_df = ext_df
+
+            # 绘图并提示
+            try:
+                self.plot.update_plot(self.processed_df, self.final_df, self.ext_df, colors={}, ref_start=params.get('ref_start'), ref_end=params.get('ref_end'))
+            except Exception:
+                pass
+
+            QtWidgets.QMessageBox.information(self, "完成", f"已生成 {0 if ext_df is None else len(ext_df)} 条周期预测")
+        except Exception as e:
+            import traceback, sys
+            print("on_generate_predictions_clicked 错误:", traceback.format_exc(), file=sys.stderr)
+            QtWidgets.QMessageBox.critical(self, "失败", str(e))
 
 # end of file

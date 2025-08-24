@@ -292,6 +292,10 @@ def collect_sample_segments(df: pd.DataFrame,
                             cycle_hours: float = 8.0,
                             cap_k: float = 3.0,
                             tol_frac: float = 0.20) -> List[Dict[str, Any]]:
+    """
+    收集样本段：已取消对片内点的限幅（不再对 high/low 做 MAD/阈值截断），
+    仅按分段和时间容差筛选片段并返回原始片段数据（方便保留原始波动）。
+    """
     if df is None or len(df) == 0:
         return []
     d = df.copy().reset_index(drop=True)
@@ -322,18 +326,6 @@ def collect_sample_segments(df: pd.DataFrame,
     idx = np.concatenate(([0], changes, [len(labels)]))
     blocks = [(labels[s], s, e) for s, e in zip(idx[:-1], idx[1:])]
 
-    def _cap_outliers(arr: np.ndarray, cap_k_local: float):
-        if arr.size <= 2:
-            return arr
-        med = float(np.median(arr))
-        mad = float(np.median(np.abs(arr - med)))
-        if mad < 1e-8:
-            std = float(np.std(arr))
-            thr = max(3.0 * std, 1e-6)
-        else:
-            thr = max(cap_k_local * mad, 1e-6)
-        return np.clip(arr, med - thr, med + thr)
-
     segs = []
     i = 0
     expected_each = cycle_hours / 2.0
@@ -351,20 +343,18 @@ def collect_sample_segments(df: pd.DataFrame,
             high_s, high_e = s2, e2
             low_s, low_e = s1, e1
 
+        # 直接使用原始片段数据（取消内部限幅）
         high_vals = _to_array(vals[high_s:high_e])
-        low_vals = _to_array(vals[low_s:low_e])
+        low_vals  = _to_array(vals[low_s:low_e])
 
-        high_vals_c = _cap_outliers(high_vals, cap_k)
-        low_vals_c  = _cap_outliers(low_vals, cap_k)
-
-        if high_vals_c.size > 1:
+        if high_vals.size > 1:
             high_dur = (times[high_e-1] - times[high_s]) + interval
         else:
-            high_dur = interval if high_vals_c.size==1 else 0.0
-        if low_vals_c.size > 1:
+            high_dur = interval if high_vals.size==1 else 0.0
+        if low_vals.size > 1:
             low_dur = (times[low_e-1] - times[low_s]) + interval
         else:
-            low_dur = interval if low_vals_c.size==1 else 0.0
+            low_dur = interval if low_vals.size==1 else 0.0
 
         ok_high = abs(high_dur - expected_each) <= tol_frac * expected_each
         ok_low  = abs(low_dur  - expected_each) <= tol_frac * expected_each
@@ -372,23 +362,23 @@ def collect_sample_segments(df: pd.DataFrame,
             i += 2
             continue
 
-        total_len = high_vals_c.size + low_vals_c.size
+        total_len = high_vals.size + low_vals.size
         if total_len < 2:
             i += 2
             continue
 
-        combined_vals = np.concatenate([high_vals_c, low_vals_c])
+        combined_vals = np.concatenate([high_vals, low_vals])
         combined_times = np.concatenate([times[high_s:high_e], times[low_s:low_e]])
-        high_mean = float(np.mean(high_vals_c)) if high_vals_c.size>0 else float(np.max(combined_vals))
-        low_mean  = float(np.mean(low_vals_c))  if low_vals_c.size>0 else float(np.min(combined_vals))
+        high_mean = float(np.mean(high_vals)) if high_vals.size>0 else float(np.max(combined_vals))
+        low_mean  = float(np.mean(low_vals))  if low_vals.size>0 else float(np.min(combined_vals))
         mid = 0.5*(high_mean + low_mean)
         diff = high_mean - low_mean
 
         segs.append({
             'times': combined_times,
             'values': combined_vals,
-            'high_vals': high_vals_c,
-            'low_vals': low_vals_c,
+            'high_vals': high_vals,
+            'low_vals': low_vals,
             'high_mean': high_mean,
             'low_mean': low_mean,
             'mid': float(mid),
