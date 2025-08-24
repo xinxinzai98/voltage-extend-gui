@@ -1,6 +1,6 @@
 # Voltage Extend GUI
 
-轻量说明与使用要点，包含最近的参数暴露与首周期截断行为。
+轻量说明与使用要点，包含最近的参数暴露与首周期截断行为（已简化版）。
 
 ## 快速启动
 1. 进入项目目录：
@@ -12,36 +12,24 @@
    python3 -u src/main.py
    ```
 
-## 新增/重要参数（GUI 可调）
-- MAD 限幅倍数（cap_k，默认 10）
-  - 基于每段中位数与 MAD 对单点偏差做限幅（把过远点拉近中位数）。值越小越严格，值越大越保留原始波动。
-- 时间容差（tol_frac，默认 2%，GUI 以百分比展示）
-  - 用于判断采样段是否接近 4 小时平台。较小值更严格，只接受更接近 4h 的段。
-- 绝对幅度因子（abs_cap_mult，默认 20）
-  - 合成后对点的绝对幅度截断因子（与全局波动尺度结合），防止孤立极端点。值越大允许更大振幅。
-- 首周期严格截断（strict_truncate，默认已勾选）
-  - 若启用，首个外延周期会“严格截断”为剩余当前平台时长 + 对端完整 4h，不会通过相位重排使首周期完整，从而保证第二周期从高位开始（避免相位错位）。
+## 本次重要改动（简短）
+- 将 dataclean 功能集成到 process 模块：
+  - process.clean_raw_data(df, col='Voltage')：基于 IQR 检测异常并按“顺移填补”实现填值。
+  - load_data 会在读取后调用 clean_raw_data（若可用）。
+- 不再对数据做自动插值：
+  - process.process_data 现在保留原始清洗后的 Voltage 作为 Voltage_interpolated（不进行额外插值或平滑）。
+- 首周期衔接：
+  - 新增 strict_truncate 标志（GUI 默认开启），可控制首周期是否严格截断（避免相位重排）。
+- 启动/性能优化：
+  - 延迟导入 matplotlib/sklearn/scipy（按需导入），PlotWidget 延迟创建画布，减小启动开销。
+- GUI 简化：
+  - 已移除 MAD/tol_frac/abs_cap 的可视调参控件（参数仍存在于 process 的默认值中：cap_k=10, abs_cap_mult=20）。
 
-## 推荐起始配置（用于常见数据）
-- cap_k = 10
-- abs_cap_mult = 20
-- 时间容差 = 2.0 (%)
-- 勾选 首周期严格截断
+## 调试与常见操作
+- 若需查看 dataclean 统计：
+  - 在读取后可以查看 processed_df.attrs 中的 dataclean_in_count / dataclean_outliers / dataclean_out_count。
+- 若需增加/调整限幅参数，请修改 process.py 中 synthesize_extension_from_samples 的 cap_k / abs_cap_mult 参数值或在后续版中把控件恢复到 GUI。
 
-根据实际数据可在 GUI 中逐步微调 cap_k 与 abs_cap_mult。
-
-## 行为说明
-- 采样：程序按高/低块配对形成完整周期样本段；时间容差 tol_frac 控制对 4h 平台时长的允许偏差。
-- 合成：首个外延周期会根据原始最后点所属平台与其已持续时间决定首周期截断（若 strict_truncate 为真），随后按完整 8h 周期生成。合成点会对单点偏差做限幅并缩放到预测的高/低均值区间。
-- 调试：采样后请查看 sample_segments（high_mean/low_mean、high_vals/low_vals）以判断是否需要放宽或收紧参数。
-
-## 导出结果
-- 在 GUI 中可导出 processed 与 final 文件，或使用 `save_results(processed_df, final_df, file_path)`。
-
-## 常见问题
-- “外延看起来被压扁”：将 cap_k / abs_cap_mult 调大。
-- “采样过多或过少”：调小/调大 时间容差（tol_frac%）。
-- “首周期相位错位”：确保启用 `首周期严格截断`。
-
-## 提交变更到 Git
-建议在本地测试通过后提交 README 更新（示例命令见下方）。
+## 提交/推送
+下面命令会把本地改动提交并推送到当前分支（请先确认已 commit 本地更改或按需修改 commit 信息）。
+参见项目根目录的 git 命令说明（见下方示例）。

@@ -3,7 +3,9 @@ import sys
 import pandas as pd
 import numpy as np
 from PyQt5 import QtWidgets
-from PyQt5.QtWidgets import QFileDialog, QLabel, QHBoxLayout, QVBoxLayout, QWidget, QPushButton, QSpinBox, QLineEdit, QCheckBox, QDoubleSpinBox
+from PyQt5.QtWidgets import QFileDialog, QLabel, QHBoxLayout, QVBoxLayout, QWidget, QPushButton, QSpinBox, QLineEdit, QCheckBox
+# 新增导入
+from PyQt5.QtCore import Qt
 # 引入 plot widget（文件已存在）
 from gui.plot_widget import PlotWidget
 
@@ -107,34 +109,12 @@ class MainWindow(QtWidgets.QMainWindow):
         single_box.addWidget(self.sample_index_spin)
         ctrl_layout.addLayout(single_box)
 
-        # 增加波动调参控件行
-        param_box = QHBoxLayout()
-        param_box.addWidget(QLabel("MAD 限幅倍数"))
-        self.cap_k_spin = QDoubleSpinBox()
-        self.cap_k_spin.setRange(0.5, 50.0)
-        self.cap_k_spin.setSingleStep(0.1)
-        self.cap_k_spin.setValue(10.0)  # 建议默认 10
-
-        param_box.addWidget(QLabel("时间容差(%)"))
-        self.tol_frac_spin = QDoubleSpinBox()
-        self.tol_frac_spin.setRange(0.0, 100.0)
-        self.tol_frac_spin.setSingleStep(0.1)  # 更精细步长
-        self.tol_frac_spin.setValue(2.0)  # 默认 2%
-
-        param_box.addWidget(QLabel("绝对幅度因子"))
-        self.abs_cap_spin = QDoubleSpinBox()
-        self.abs_cap_spin.setRange(0.1, 100.0)
-        self.abs_cap_spin.setSingleStep(0.1)
-        self.abs_cap_spin.setValue(20.0)  # 建议默认 20
-
-        # 新增首周期严格截断复选框
+        # 把三个调参控件（MAD 限幅倍数、时间容差、绝对幅度因子）删除，
+        # 仅保留“首周期严格截断”复选框，避免与 heavy 依赖产生的交互问题
         self.strict_trunc_checkbox = QCheckBox("首周期严格截断（不调整相位）")
         self.strict_trunc_checkbox.setChecked(True)
         self.strict_trunc_checkbox.setToolTip("勾选后首周期按原始已持续时长截断，避免相位重排导致后续周期错位")
-
-        param_box.addWidget(self.strict_trunc_checkbox)
-
-        ctrl_layout.addLayout(param_box)
+        ctrl_layout.addWidget(self.strict_trunc_checkbox)
 
         btn_row = QHBoxLayout()
         self.export_btn = QPushButton("导出数据")
@@ -176,11 +156,61 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_file_path = path
         if process_module is None:
             raise RuntimeError("无法导入 process 模块，请确保 src/process.py 可被导入")
-        df = process_module.read_data(path)
-        if df is None or len(df) == 0:
-            raise RuntimeError("读取到空数据，请检查文件")
-        self.processed_df = process_module.process_data(df)
-        self.on_param_changed()
+
+        # 进度对话框（可取消）
+        dlg = QtWidgets.QProgressDialog("正在加载数据...", "取消", 0, 100, self)
+        dlg.setWindowTitle("加载中")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(200)
+        dlg.setValue(0)
+        try:
+            # 步骤 1: 读取文件
+            dlg.setLabelText("读取文件...")
+            QtWidgets.QApplication.processEvents()
+            df = process_module.read_data(path)
+            dlg.setValue(20)
+            if dlg.wasCanceled():
+                return
+
+            if df is None or len(df) == 0:
+                raise RuntimeError("读取到空数据，请检查文件")
+
+            # 步骤 2: 清洗（若可用）
+            dlg.setLabelText("清洗原始数据...")
+            QtWidgets.QApplication.processEvents()
+            try:
+                if hasattr(process_module, 'clean_raw_data'):
+                    df_clean = process_module.clean_raw_data(df, col='Voltage')
+                else:
+                    df_clean = df
+            except Exception:
+                df_clean = df
+            dlg.setValue(60)
+            if dlg.wasCanceled():
+                return
+
+            # 步骤 3: 处理（不做额外插值）
+            dlg.setLabelText("处理数据...")
+            QtWidgets.QApplication.processEvents()
+            try:
+                self.processed_df = process_module.process_data(df_clean)
+            except Exception as e:
+                # 回退为原始已清洗数据（保证后续不崩溃）
+                self.processed_df = df_clean
+            dlg.setValue(85)
+            if dlg.wasCanceled():
+                return
+
+            # 步骤 4: 更新界面（计算预测/绘图等）
+            dlg.setLabelText("更新界面...")
+            QtWidgets.QApplication.processEvents()
+            try:
+                self.on_param_changed()
+            except Exception:
+                pass
+            dlg.setValue(100)
+        finally:
+            dlg.close()
 
     def on_export_clicked(self):
         if self.processed_df is None:
@@ -285,10 +315,8 @@ class MainWindow(QtWidgets.QMainWindow):
                     sample_end = float(txt) if txt != '' else None
                 except Exception:
                     sample_end = None
-            # 在 on_collect_samples_clicked 中读取并传入 cap_k/tol_frac:
-            cap_k = float(self.cap_k_spin.value())
-            tol_frac = float(self.tol_frac_spin.value()) / 100.0
-            segs = process_module.collect_sample_segments(self.processed_df, sample_start=sample_start, sample_end=sample_end, cap_k=cap_k, tol_frac=tol_frac)
+            # 不再从 GUI 读取 cap_k / tol_frac，使用 process 模块的默认行为
+            segs = process_module.collect_sample_segments(self.processed_df, sample_start=sample_start, sample_end=sample_end)
             self.sample_segments = segs
             # 更新索引选择器范围
             max_idx = max(0, len(segs) - 1)
@@ -352,10 +380,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 new_mid_times = last_time + cycle_hours * np.arange(1, n_cycles + 1)
             ext_cycles_df['Time'] = new_mid_times
 
-            # 调用合成（把 start_phase 传入，保证首周期相位与原始末尾一致）
-            # 在 on_synthesize_clicked 中读取并传入 cap_k/abs_cap_mult:
-            cap_k = float(self.cap_k_spin.value())
-            abs_cap_mult = float(self.abs_cap_spin.value())
+            # 调用合成（不再从 GUI 读取 cap_k/abs_cap_mult，而使用 process 模块默认值；仍传 strict_truncate）
             strict_truncate = bool(self.strict_trunc_checkbox.isChecked())
             ext_samples = process_module.synthesize_extension_from_samples(
                 self.processed_df,
@@ -368,8 +393,6 @@ class MainWindow(QtWidgets.QMainWindow):
                 stretch_limit=0.25,
                 residual_scale=1.0,
                 start_phase=start_phase,
-                cap_k=cap_k,
-                abs_cap_mult=abs_cap_mult,
                 strict_truncate=strict_truncate
             )
             self.ext_df_samples = ext_samples
@@ -405,4 +428,5 @@ class MainWindow(QtWidgets.QMainWindow):
             import traceback, sys
             print("on_synthesize_clicked 错误:", traceback.format_exc(), file=sys.stderr)
             QtWidgets.QMessageBox.critical(self, "生成失败", str(e))
+
 # end of file
