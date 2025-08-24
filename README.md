@@ -1,96 +1,47 @@
 # Voltage Extend GUI
 
-This project provides a graphical user interface (GUI) for extending voltage data and visualizing the results in real-time. The application allows users to adjust parameters dynamically and see how these changes affect the data processing outcomes.
+轻量说明与使用要点，包含最近的参数暴露与首周期截断行为。
 
-## Project Structure
-
-- **src/**: Contains the main application code.
-  - **main.py**: Entry point for the application.
-  - **process.py**: Data processing functions for extending voltage data and handling outliers.
-  - **config.py**: Configuration settings and constants.
-  - **gui/**: Contains GUI-related files.
-    - **app.py**: Initializes the main application window.
-    - **main_window.py**: Defines the layout of the main window.
-    - **controls.py**: Implements controls like sliders and buttons for parameter adjustment.
-    - **plot_widget.py**: Integrates matplotlib for real-time plotting.
-    - **ui_main.ui**: Optional Qt Designer UI file for visual layout.
-  - **widgets/**: Custom widgets for the application.
-    - **parameter_panel.py**: Displays and modifies adjustable coefficients.
-  - **io/**: Handles data loading and saving operations.
-    - **data_loader.py**: Reads input data files and saves processed results.
-  
-- **tests/**: Contains unit tests for the application.
-  - **test_extend.py**: Tests for the extension functionality.
-
-- **requirements.txt**: Lists the dependencies required for the project.
-
-- **.gitignore**: Specifies files and directories to ignore in version control.
-
-## Setup Instructions
-
-1. Clone the repository:
+## 快速启动
+1. 进入项目目录：
    ```
-   git clone <repository-url>
-   cd voltage-extend-gui
+   cd /Users/hive/Desktop/氢能产品数据/voltage-extend-gui
+   ```
+2. 启动程序（Mac，已安装依赖）：
+   ```
+   python3 -u src/main.py
    ```
 
-2. Install the required dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
+## 新增/重要参数（GUI 可调）
+- MAD 限幅倍数（cap_k，默认 10）
+  - 基于每段中位数与 MAD 对单点偏差做限幅（把过远点拉近中位数）。值越小越严格，值越大越保留原始波动。
+- 时间容差（tol_frac，默认 2%，GUI 以百分比展示）
+  - 用于判断采样段是否接近 4 小时平台。较小值更严格，只接受更接近 4h 的段。
+- 绝对幅度因子（abs_cap_mult，默认 20）
+  - 合成后对点的绝对幅度截断因子（与全局波动尺度结合），防止孤立极端点。值越大允许更大振幅。
+- 首周期严格截断（strict_truncate，默认已勾选）
+  - 若启用，首个外延周期会“严格截断”为剩余当前平台时长 + 对端完整 4h，不会通过相位重排使首周期完整，从而保证第二周期从高位开始（避免相位错位）。
 
-3. Run the application:
-   ```
-   python src/main.py
-   ```
+## 推荐起始配置（用于常见数据）
+- cap_k = 10
+- abs_cap_mult = 20
+- 时间容差 = 2.0 (%)
+- 勾选 首周期严格截断
 
-## Usage
+根据实际数据可在 GUI 中逐步微调 cap_k 与 abs_cap_mult。
 
-- Use the sliders in the GUI to adjust parameters for the voltage extension process.
-- The results will be visualized in real-time, allowing for immediate feedback on the effects of parameter changes.
-- Save the processed data using the provided controls.
+## 行为说明
+- 采样：程序按高/低块配对形成完整周期样本段；时间容差 tol_frac 控制对 4h 平台时长的允许偏差。
+- 合成：首个外延周期会根据原始最后点所属平台与其已持续时间决定首周期截断（若 strict_truncate 为真），随后按完整 8h 周期生成。合成点会对单点偏差做限幅并缩放到预测的高/低均值区间。
+- 调试：采样后请查看 sample_segments（high_mean/low_mean、high_vals/low_vals）以判断是否需要放宽或收紧参数。
 
-# Voltage Extend GUI - 使用说明（中文）
+## 导出结果
+- 在 GUI 中可导出 processed 与 final 文件，或使用 `save_results(processed_df, final_df, file_path)`。
 
-本项目提供一个交互式桌面应用，用于对电压序列数据做“外延”预测并实时可视化。界面允许动态调整外延算法中的各类系数（如收缩系数、抖动系数、低频混合比等），修改后会立即触发处理与绘图更新，便于对算法效果进行交互式调试与比较。
+## 常见问题
+- “外延看起来被压扁”：将 cap_k / abs_cap_mult 调大。
+- “采样过多或过少”：调小/调大 时间容差（tol_frac%）。
+- “首周期相位错位”：确保启用 `首周期严格截断`。
 
-主要功能
-- 加载 Excel/CSV 原始数据（第一列为 Time（小时），第二列为 Voltage）
-- 异常值检测与插值（参见 [`detect_outliers`](src/process.py) / [`process_data`](src/process.py)）
-- 基于周期块的高低位建模与外延（核心为 [`extend_data`](src/process.py)）
-- 参数面板实时调整参数，界面自动调用外延并更新绘图（参见 [`MainWindow`](src/gui/main_window.py)）
-- 导出处理后的数据与外延结果，保存图像
-
-快速上手
-1. 安装依赖：
-   ```
-   pip install -r requirements.txt
-   ```
-2. 运行应用：
-   ```
-   python src/main.py
-   ```
-3. 在主界面点击 “Load Data” 选择数据文件。默认会尝试加载 `data-layang_clean.xlsx`（若存在）。
-4. 在左侧面板调整参数（收缩系数、抖动缩放、平滑窗口等），每次修改会触发重新计算并更新右侧绘图。
-5. 使用“导出数据”可以将处理结果保存为 Excel；“保存图像”可以导出当前图像。
-
-主要文件说明
-- src/process.py：数据处理与外延算法实现，核心函数为 [`extend_data`](src/process.py)。
-- src/gui/main_window.py：主界面实现，参数控件与信号连接，以及调用 [`extend_data`](src/process.py) 更新图与数据。
-- src/gui/plot_widget.py：Matplotlib 嵌入窗口，负责实时绘图与交互（缩放/平移/框选）。
-- src/io/data_loader.py：数据读写辅助（兼容 xlsx/csv）。
-- tests/test_extend.py：单元测试示例。
-
-实时调参与调试建议
-- 在界面调整参数后，关注右侧绘图的“预测高位 / 预测低位”曲线形态，判断收缩系数（shrink_alpha）与 max_growth 对差值振幅的影响。
-- 若需要在代码层面验证或扩展逻辑，查看并修改 [`extend_data`](src/process.py) 的参数默认值或内部子函数（例如 `_fit_predict_cycles`、`_build_residual_pools` 等）。
-- 绘图风格、颜色与线宽可在主窗口面板中直接调整，便于对比不同参数下的曲线视觉差异。
-
-依赖与环境
-请参见 `requirements.txt`（在本目录下）安装必要库。建议使用 Python 3.8+ 虚拟环境。
-
-贡献
-欢迎提交 issue 或 PR。若需添加新参数或改进可视化交互，请在 GUI 部分（`src/gui/`）实现并确保参数变化会调用 `on_param_changed` 来触发更新。
-
-许可证
-本项目默认 MIT（如需更改请在仓库根目录添加 LICENSE 文件）。
+## 提交变更到 Git
+建议在本地测试通过后提交 README 更新（示例命令见下方）。
