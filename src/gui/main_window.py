@@ -136,6 +136,12 @@ class MainWindow(QtWidgets.QMainWindow):
         btn_row.addWidget(self.predict_btn)
         self.predict_btn.clicked.connect(self.on_generate_predictions_clicked)
 
+        # 新增：为预测线添加低频扰动按钮（百小时量级，最大振幅 ≤ 5%）
+        self.perturb_btn = QPushButton("添加低频扰动")
+        self.perturb_btn.setToolTip("为当前预测线添加百小时量级低频扰动（最大振幅不超过预测线 5%）")
+        btn_row.addWidget(self.perturb_btn)
+        self.perturb_btn.clicked.connect(self.on_add_lowfreq_perturb_clicked)
+
         ctrl_layout.addLayout(btn_row)
         self.export_btn.clicked.connect(self.on_export_clicked)
         self.save_img_btn.clicked.connect(self.on_save_image_clicked)
@@ -460,6 +466,108 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             import traceback, sys
             print("on_generate_predictions_clicked 错误:", traceback.format_exc(), file=sys.stderr)
+            QtWidgets.QMessageBox.critical(self, "失败", str(e))
+
+    def on_add_lowfreq_perturb_clicked(self):
+        """为当前预测线添加超低幅度低频扰动（作用于预测线，不修改原始数据）。
+        - 每点扰动 |Δ| ≤ 0.002 * 基准（即 0.2%）
+        - 扰动由更多低频成分构成（长周期正弦、多谐波、平滑随机游走、非常低频趋势），频率更低以避免预测区间内重复相似波形。
+        - 保证预测线两端点（首末点）不发生变化。
+        """
+        try:
+            if getattr(self, 'ext_df', None) is None or len(self.ext_df) == 0:
+                QtWidgets.QMessageBox.information(self, "提示", "请先生成预测线（点击“生成预测线”）")
+                return
+
+            df = self.ext_df.copy().reset_index(drop=True)
+            if not ('pred_high' in df.columns and 'pred_low' in df.columns):
+                QtWidgets.QMessageBox.warning(self, "警告", "预测数据格式不包含 pred_high / pred_low")
+                return
+
+            t = df['Time'].values.astype(float)
+            ph = df['pred_high'].values.astype(float)
+            pl = df['pred_low'].values.astype(float)
+
+            # per-point 基准尺度（mid 或退化到 pred 的一半），避免为 0
+            mid = 0.5 * (ph + pl)
+            fallback = 0.5 * np.maximum(np.abs(ph), np.abs(pl))
+            base_per_point = np.maximum(np.abs(mid), fallback)
+            base_per_point = np.maximum(base_per_point, 1e-8)
+
+            # 每点最大允许扰动（0.2%）
+            cap_per_point = 0.002 * base_per_point
+
+            rng = np.random.default_rng()
+            n = len(t)
+            rel_t = (t - t[0]).astype(float)
+
+            # 组合更多非常低频成分
+            wav = np.zeros(n, dtype=float)
+
+            # 1) 多个超低频正弦（周期范围更大，避免重复）：4 个分量
+            for k in range(4):
+                period = float(rng.uniform(150.0, max(400.0, rel_t[-1] * 2.0 + 1.0)))
+                freq = 2.0 * np.pi / period
+                phase = float(rng.uniform(0, 2.0 * np.pi))
+                amp = float(rng.uniform(0.5, 1.0)) * (1.0 / (1 + k))
+                wav += amp * np.sin(freq * rel_t + phase)
+
+            # 2) 非周期低频包络（非常慢变化的余弦，周期更长）
+            long_period = float(rng.uniform(max(300.0, rel_t[-1]), max(600.0, rel_t[-1]*3.0)))
+            wav += 0.5 * np.cos(2.0 * np.pi / long_period * rel_t + rng.uniform(0, 2.0*np.pi))
+
+            # 3) 平滑随机游走（低频、规范化后加入）
+            noise = rng.normal(scale=1.0, size=n)
+            rw = np.cumsum(noise)
+            win = max(5, int(max(5, n // 6)))
+            kernel = np.ones(win) / win
+            rw_smooth = np.convolve(rw, kernel, mode='same')
+            if np.max(np.abs(rw_smooth)) > 0:
+                wav += 0.25 * (rw_smooth / np.max(np.abs(rw_smooth)))
+
+            # 4) 非对称缓慢漂移（多项式/线性微漂移）
+            drift_scale = float(rng.uniform(-0.2, 0.2))
+            drift = drift_scale * ((rel_t - rel_t.mean()) / (rel_t.max() - rel_t.min() + 1e-9))
+            wav += 0.15 * drift
+
+            # 归一化到 [-1,1]
+            max_abs = np.max(np.abs(wav))
+            if max_abs < 1e-12:
+                wav_norm = np.zeros_like(wav)
+            else:
+                wav_norm = wav / max_abs
+
+            # 每点乘以 cap_per_point（确保不超过 0.2%）
+            delta = wav_norm * cap_per_point
+
+            # 保证两端点不动：首/末点扰动置 0（避免端点位移）
+            if n >= 1:
+                delta[0] = 0.0
+                delta[-1] = 0.0
+
+            # 应用扰动到预测线上（同时作用于 high 和 low）
+            df['pred_high'] = ph + delta
+            df['pred_low']  = pl + delta
+
+            # 保存扰动后的预测并重绘（不修改原始 processed_df）
+            self.ext_df = df
+
+            try:
+                # 用 processed_df + ext_df 作展示（保留原始 final_df 不被覆盖）
+                self.final_df = pd.concat([self.processed_df, self.ext_df.rename(columns={'pred_high':'Voltage_pred_high','pred_low':'Voltage_pred_low'})], ignore_index=True).sort_values('Time').reset_index(drop=True)
+            except Exception:
+                pass
+
+            try:
+                params = self.get_params()
+                self.plot.update_plot(self.processed_df, self.final_df if getattr(self,'final_df',None) is not None else None, self.ext_df, colors={}, ref_start=params.get('ref_start'), ref_end=params.get('ref_end'))
+            except Exception:
+                pass
+
+            QtWidgets.QMessageBox.information(self, "完成", "已为预测线添加超低幅度低频扰动（每点 ≤ 0.2%，两端点不变）")
+        except Exception as e:
+            import traceback, sys
+            print("on_add_lowfreq_perturb_clicked 错误:", traceback.format_exc(), file=sys.stderr)
             QtWidgets.QMessageBox.critical(self, "失败", str(e))
 
 # end of file
