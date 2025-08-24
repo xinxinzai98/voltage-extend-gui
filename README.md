@@ -55,3 +55,41 @@
   git commit -m "chore: update README and requirements"
   git push origin HEAD
   ```
+
+## Windows（使用 Anaconda / Miniconda）一键指南
+简洁、可直接复制执行的流程（推荐在 Anaconda Prompt 中运行）：
+
+1) 克隆仓库
+```
+git clone <REMOTE_GIT_URL>
+cd voltage-extend-gui
+```
+
+2) 使用项目中的 environment.yml 一键创建环境
+```
+conda env create -f environment.yml
+conda activate voltage_env
+```
+若想自定义环境名：
+```
+conda env create -f environment.yml -n my_env_name
+conda activate my_env_name
+```
+
+3) 运行程序
+```
+python -u src/main.py
+```
+
+4) 若没有 environment.yml，可手动创建环境并安装依赖（conda-forge）
+```
+conda create -n voltage_env python=3.10 -y
+conda activate voltage_env
+conda install -c conda-forge pandas numpy pyqt openpyxl matplotlib scikit-learn scipy -y
+python -u src/main.py
+```
+
+5) 常见问题（快速提示）
+- 如果 PyQt 或二进制包安装失败，使用 conda-forge 通常更可靠。  
+- 若程序报模块缺失，确认已激活 conda 环境并安装相应包。  
+- 若 Excel 读取失败，检查 openpyxl 是否安装： `conda list openpyxl`。
